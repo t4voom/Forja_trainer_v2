@@ -198,7 +198,7 @@ svg { display: block; flex: none; }
 .kpi { padding: 18px 20px; }
 .kpi-label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
 .kpi-label svg { color: var(--text-3); }
-.kpi-value { margin-top: 10px; font-size: 34px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+.kpi-value { margin-top: 10px; font-size: 34px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kpi-value small { margin-left: 4px; font-size: 18px; font-weight: 600; color: var(--text-3); letter-spacing: -0.02em; }
 .kpi-foot { margin-top: 10px; font-size: 13px; color: var(--text-2); }
 .kpi .meter { margin-top: 12px; }
@@ -713,6 +713,8 @@ select.field { appearance: none; padding-right: 32px; background-image: url("dat
   .page { padding: 16px 16px 96px; }
   .top { padding: 0 16px; }
   .kpis { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .kpi { padding: 16px; }
+  .kpi-value small { font-size: 15px; }
   .dl { grid-template-columns: minmax(0, 1fr); }
   .dl dt { padding-bottom: 0; border-bottom: 0; }
   .ex-tiles { grid-template-columns: minmax(0, 1fr); }
