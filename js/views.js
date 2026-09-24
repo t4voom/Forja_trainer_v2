@@ -286,6 +286,25 @@
     return out;
   }
 
+  // Cardio registrado no app (mesmos ids de js/cardio.js do FORJA)
+  const CARDIO = { esteira: 'Esteira', corrida: 'Corrida', caminhada: 'Caminhada', bike: 'Bike ergométrica', pedal: 'Pedal', eliptico: 'Elíptico', escada: 'Escada', remo: 'Remo', natacao: 'Natação', corda: 'Pular corda', aula: 'Aula', outro: 'Outro' };
+  const CARDIO_PACE = { esteira: 'km', corrida: 'km', caminhada: 'km', remo: '500m', natacao: '100m' };
+  const cardioName = (x) => (x.atividade === 'outro' && x.nome ? x.nome : CARDIO[x.atividade] || 'Cardio');
+  const minText = (min) => (min < 60 ? `${Math.round(min)} min` : `${Math.floor(min / 60)}h${Math.round(min % 60) ? ` ${String(Math.round(min % 60)).padStart(2, '0')}min` : ''}`);
+  const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+  function cardioMeta(x) {
+    const out = [minText(x.duracaoSeg / 60)];
+    if (x.distanciaKm) {
+      const inMeters = (x.atividade === 'natacao' || x.atividade === 'remo') && x.distanciaKm < 10;
+      out.push(inMeters ? `${F.num(Math.round(x.distanciaKm * 1000))} m` : `${F.num(x.distanciaKm)} km`);
+      const perKm = x.duracaoSeg / x.distanciaKm;
+      const pace = CARDIO_PACE[x.atividade];
+      out.push(pace === 'km' ? `${mmss(perKm)}/km` : pace === '500m' ? `${mmss(perKm / 2)}/500 m` : pace === '100m' ? `${mmss(perKm / 10)}/100 m` : `${F.num(Math.round((x.distanciaKm / (x.duracaoSeg / 3600)) * 10) / 10)} km/h`);
+    }
+    if (x.rpe) out.push(`RPE ${x.rpe}`);
+    return out.join(' · ');
+  }
+
   const daysSince = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / DAY)) : null);
   const volumeText = (kg) => (kg >= 1000 ? `${F.num(Math.round(kg / 100) / 10)} t` : `${F.num(Math.round(kg))} kg`);
   const exName = (e) => ((global.Exercises.get(e.exerciseId) || {}).name || e.nome || e.exerciseId);
@@ -298,10 +317,14 @@
   // Pontos de atenção: o que o treinador deveria olhar primeiro (e o que merece um parabéns)
   function insightsOf(d, a, muscles) {
     const r = a.resumo, out = [];
-    const days = daysSince(r.ultimoTreino);
-    if (!r.totalTreinos) out.push({ nivel: 'info', icon: 'info', texto: 'Ainda não registrou nenhum treino no app.', sub: 'Os números aparecem aqui assim que o aluno concluir o primeiro treino.' });
-    else if (days >= 14) out.push({ nivel: 'erro', icon: 'alert', texto: `Sem treinar há ${days} dias.`, sub: `Último treino em ${F.date(r.ultimoTreino)}. Vale mandar uma mensagem.` });
-    else if (days >= 7) out.push({ nivel: 'aviso', icon: 'alert', texto: `Sem treinar há ${days} dias.`, sub: `Último treino em ${F.date(r.ultimoTreino)}.` });
+    // Última atividade: treino de musculação ou cardio (o cardio também conta como treinar)
+    const lastAny = [r.ultimoTreino, r.ultimoCardio].filter(Boolean).sort().pop() || '';
+    const days = daysSince(lastAny);
+    const lastWhat = lastAny && lastAny === r.ultimoCardio && lastAny !== r.ultimoTreino ? 'Último cardio' : 'Último treino';
+    if (!r.totalTreinos && !r.ultimoCardio) out.push({ nivel: 'info', icon: 'info', texto: 'Ainda não registrou nenhum treino no app.', sub: 'Os números aparecem aqui assim que o aluno concluir o primeiro treino.' });
+    else if (days >= 14) out.push({ nivel: 'erro', icon: 'alert', texto: `Sem treinar há ${days} dias.`, sub: `${lastWhat} em ${F.date(lastAny)}. Vale mandar uma mensagem.` });
+    else if (days >= 7) out.push({ nivel: 'aviso', icon: 'alert', texto: `Sem treinar há ${days} dias.`, sub: `${lastWhat} em ${F.date(lastAny)}.` });
+    else if (r.totalTreinos && daysSince(r.ultimoTreino) >= 14 && r.ultimoCardio) out.push({ nivel: 'info', icon: 'heartPulse', texto: `Só cardio nos últimos ${daysSince(r.ultimoTreino)} dias.`, sub: `Sem musculação desde ${F.date(r.ultimoTreino)}.` });
     if (r.treinos30Anterior >= 4 && r.treinos30 <= r.treinos30Anterior * 0.6) {
       out.push({ nivel: 'aviso', icon: 'alert', texto: 'A frequência caiu.', sub: `${plural(r.treinos30, 'treino', 'treinos')} nos últimos 30 dias, contra ${r.treinos30Anterior} nos 30 anteriores.` });
     }
@@ -398,6 +421,10 @@
       const lastS = an.sessoes[0];
       const insights = insightsOf(d, an, muscles);
       const trained12 = an.semanas.reduce((n, w) => n + w.treinos, 0);
+      const cardioDays12 = an.dias.filter((x) => x.cardioMin).length;
+      const cardio = an.cardio && an.cardio.total ? an.cardio : null;
+      const acts = cardio ? cardio.porAtividade30 : [];
+      const maxAct = Math.max(1, ...acts.map((x) => x.minutos));
       const tile = (e) => {
         const pts = e.pontos, lp = pts[pts.length - 1], fp = pts[0];
         const unit = e.medida === 'carga' ? 'kg' : 'reps';
@@ -422,7 +449,7 @@
             <div class="card-head is-wrap"><div><h2 class="card-title">Semana a semana</h2><p class="card-sub">Últimas 12 semanas</p></div><span data-measure></span></div>
             <div class="card-body">
               <div data-weekly></div>
-              <div class="chart-foot"><span class="key">Semana completa</span><span class="key is-current">Semana atual, em andamento</span></div>
+              <div class="chart-foot" data-weekly-foot><span class="key">Semana completa</span><span class="key is-current">Semana atual, em andamento</span></div>
               <div class="stats is-4 mt-4">
                 <div class="stat"><p class="stat-label">Séries · 30 dias</p><p class="stat-value">${F.num(r.series30)}</p></div>
                 <div class="stat"><p class="stat-label">Duração média</p><p class="stat-value">${r.duracaoMedia30 ? `${Math.round(r.duracaoMedia30 / 60)}<small>min</small>` : '—'}</p></div>
@@ -438,8 +465,8 @@
         </div>
         <div class="grid cols-2 mt-4">
           <section class="card">
-            <div class="card-head"><div><h2 class="card-title">Dias de treino</h2><p class="card-sub">${plural(trained12, 'treino', 'treinos')} nas últimas 12 semanas</p></div></div>
-            <div class="card-body" data-heat></div>
+            <div class="card-head"><div><h2 class="card-title">Dias de treino</h2><p class="card-sub">${plural(trained12, 'treino', 'treinos')}${cardioDays12 ? ` e ${plural(cardioDays12, 'dia', 'dias')} com cardio` : ''} nas últimas 12 semanas</p></div></div>
+            <div class="card-body"><div data-heat></div>${cardioDays12 ? '<p class="chart-foot">Dias só com cardio ficam no tom mais claro.</p>' : ''}</div>
           </section>
           <section class="card">
             <div class="card-head"><div><h2 class="card-title">Séries por músculo</h2><p class="card-sub">Por semana, na média das últimas 4 semanas</p></div></div>
@@ -449,6 +476,24 @@
             </div>
           </section>
         </div>
+        ${cardio ? `
+        <section class="card mt-4">
+          <div class="card-head"><div><h2 class="card-title">Cardio</h2><p class="card-sub">Últimos 30 dias · registrado pelo aluno no app</p></div></div>
+          <div class="card-body">
+            <div class="stats is-4">
+              <div class="stat"><p class="stat-label">Atividades</p><p class="stat-value">${F.num(r.cardio30 || 0)}</p></div>
+              <div class="stat"><p class="stat-label">Tempo</p><p class="stat-value">${r.cardioMin30 ? minText(r.cardioMin30).replace(/ min$/, '<small>min</small>') : '—'}</p><p class="stat-note">${r.cardioMin30 || r.cardioMin30Anterior ? `${goodDelta(r.cardioMin30 - r.cardioMin30Anterior, ' min')} vs 30 dias anteriores` : ''}</p></div>
+              <div class="stat"><p class="stat-label">Distância</p><p class="stat-value">${r.cardioKm30 ? `${F.num(r.cardioKm30)}<small>km</small>` : '—'}</p></div>
+              <div class="stat"><p class="stat-label">Último cardio</p><p class="stat-value" style="font-size:16px">${esc(F.ago(r.ultimoCardio))}</p><p class="stat-note">${esc(F.date(r.ultimoCardio))}</p></div>
+            </div>
+            ${acts.length ? `<div class="cardio-acts">${acts.map((x) => `
+              <div class="cardio-act">
+                <span class="cardio-act-name">${esc(cardioName(x))}</span>
+                <span class="cardio-act-meta">${plural(x.vezes, 'vez', 'vezes')} · ${minText(x.minutos)}${x.distanciaKm ? ` · ${F.num(x.distanciaKm)} km` : ''}</span>
+                <span class="cardio-act-bar" aria-hidden="true"><span style="width:${Math.max(3, Math.round((x.minutos / maxAct) * 100))}%"></span></span>
+              </div>`).join('')}</div>` : '<p class="card-sub mt-4">Nenhum cardio nos últimos 30 dias.</p>'}
+          </div>
+        </section>` : ''}
         <section class="card mt-4">
           <div class="card-head"><div><h2 class="card-title">Progressão de carga</h2><p class="card-sub">Carga máxima de cada treino nos exercícios mais feitos (sem carga: repetições)</p></div></div>
           <div class="card-body">${an.exercicios.length ? `<div class="ex-tiles">${an.exercicios.map(tile).join('')}</div>` : TUI.emptyHTML('chart', 'Sem exercícios nos últimos 90 dias', 'A progressão aparece quando o aluno registrar treinos no app.')}</div>
@@ -460,12 +505,16 @@
       series: { label: 'Séries', aria: 'Séries por semana', integer: true, format: (v) => F.num(v) },
       volume: { label: 'Volume', aria: 'Volume por semana (carga × repetições)', integer: false, format: volumeText }
     };
+    if (an && an.semanas.some((w) => w.cardioMin > 0)) MEASURES.cardioMin = { label: 'Cardio', aria: 'Minutos de cardio por semana', integer: true, format: (v) => `${F.num(v)} min` };
+    if (!MEASURES[weeklyMeasure.value]) weeklyMeasure.value = 'treinos';
     function paintWeekly() {
       const host = body.querySelector('[data-weekly]');
       if (!host) return;
       const m = MEASURES[weeklyMeasure.value];
+      const isCardio = weeklyMeasure.value === 'cardioMin';
+      body.querySelector('[data-weekly-foot]')?.classList.toggle('is-cardio', isCardio);
       const items = an.semanas.map((w, i) => ({ label: weekLabel(w.inicio), value: w[weeklyMeasure.value], note: i === an.semanas.length - 1 ? 'semana atual' : `semana de ${weekLabel(w.inicio)}`, current: i === an.semanas.length - 1 }));
-      host.replaceChildren(TUI.columnChart(items, { format: m.format, integer: m.integer, label: `${m.aria} nas últimas 12 semanas`, width: host.clientWidth || 720 }));
+      host.replaceChildren(TUI.columnChart(items, { format: m.format, integer: m.integer, label: `${m.aria} nas últimas 12 semanas`, width: host.clientWidth || 720, tone: isCardio ? 'cardio' : '' }));
       // Redesenha quando a largura muda (janela redimensionada, celular girado)
       if (!host.resizer && global.ResizeObserver) {
         let w = host.clientWidth;
@@ -476,17 +525,32 @@
 
     function historyHTML() {
       if (!an) return `<section class="card">${TUI.emptyHTML('refresh', 'Histórico indisponível', 'Publique o Code.gs atualizado para ver o histórico detalhado.')}</section>`;
+      // Musculação (as 30 mais recentes) e cardio (os 15 mais recentes), em ordem de data
+      const cardioList = (an.cardio && an.cardio.recentes) || [];
+      const oldestSession = an.sessoes.length === 30 ? an.sessoes[29].data : '';
+      const items = an.sessoes.map((x, i) => ({ kind: 'session', data: x.data, x, i }))
+        .concat(cardioList.filter((c) => c.data >= oldestSession).map((c) => ({ kind: 'cardio', data: c.data, x: c })))
+        .sort((a, b) => (a.data < b.data ? 1 : -1));
+      const sub = an.sessoes.length || cardioList.length
+        ? `${an.sessoes.length ? `${plural(an.sessoes.length, 'treino mais recente', 'treinos mais recentes')}. Clique num treino para ver séries e cargas.` : ''}${cardioList.length ? ' O cardio aparece junto.' : ''}`.trim()
+        : 'Registrados pelo aluno no app';
       return `
         <section class="card">
-          <div class="card-head"><div><h2 class="card-title">Treinos realizados</h2><p class="card-sub">${an.sessoes.length ? `Os ${an.sessoes.length} mais recentes. Clique para ver séries e cargas.` : 'Registrados pelo aluno no app'}</p></div></div>
+          <div class="card-head"><div><h2 class="card-title">Treinos realizados</h2><p class="card-sub">${sub}</p></div></div>
           <div class="card-body is-flush">
-            ${an.sessoes.length ? `<ul class="list">${an.sessoes.map((x, i) => `
+            ${items.length ? `<ul class="list">${items.map(({ kind, x, i }) => (kind === 'cardio' ? `
+              <li>
+                <span class="timeline-dot cardio-dot">${icon('heartPulse', { size: 14, stroke: 2 })}</span>
+                <div class="list-main"><p class="list-title">${esc(cardioName(x))} <span class="pill no-dot">Cardio</span></p><p class="list-sub">${esc(cardioMeta(x))}</p></div>
+                <span class="list-meta">${esc(F.dateTime(x.data))}</span>
+                <span style="width:16px" aria-hidden="true"></span>
+              </li>` : `
               <li class="is-link" data-session="${i}" tabindex="0" role="button" aria-label="Ver detalhes do treino ${esc(x.treino)} de ${esc(F.date(x.data))}">
                 <span class="timeline-dot is-success">${icon('check', { size: 14, stroke: 2.2 })}</span>
                 <div class="list-main"><p class="list-title">${esc(x.treino)}</p><p class="list-sub">${plural(x.exercicios.length, 'exercício', 'exercícios')} · ${plural(x.series, 'série', 'séries')} · ${volumeText(x.volume)}${x.duracaoSeg ? ` · ${Math.round(x.duracaoSeg / 60)} min` : ''}${x.rpe ? ` · RPE ${x.rpe}` : ''}</p></div>
                 <span class="list-meta">${esc(F.dateTime(x.data))}</span>
                 ${icon('chevronRight', { size: 16, cls: 'faint' })}
-              </li>`).join('')}</ul>`
+              </li>`)).join('')}</ul>`
               : TUI.emptyHTML('dumbbell', 'Nenhum treino registrado', 'Quando o aluno concluir um treino no app, ele aparece aqui.')}
           </div>
         </section>`;

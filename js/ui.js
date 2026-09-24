@@ -17,7 +17,8 @@
     key: '<circle cx="8" cy="15.5" r="3.75"/><path d="m10.75 12.75 8.5-8.5M16.5 7l2.5 2.5M14.25 9.25l1.75 1.75"/>',
     login: '<path d="M9.75 4.75h-3a2 2 0 0 0-2 2v10.5a2 2 0 0 0 2 2h3"/><path d="M14 16.25 18.25 12 14 7.75M18.25 12H8.5"/>',
     moon: '<path d="M19.5 14.5A7.75 7.75 0 0 1 9.5 4.5a7.75 7.75 0 1 0 10 10z"/>',
-    activity: '<path d="M3.75 12h3.5l2.5-6.5 4.5 13 2.5-6.5h3.5"/>'
+    activity: '<path d="M3.75 12h3.5l2.5-6.5 4.5 13 2.5-6.5h3.5"/>',
+    heartPulse: '<path d="M12 19.75S3.75 15 3.75 9.1A4.35 4.35 0 0 1 12 7.2a4.35 4.35 0 0 1 8.25 1.9C20.25 15 12 19.75 12 19.75z"/><path d="M6.75 12.25h2.5l1.5-2.5 2 4.5 1.5-2h3"/>'
   });
 
   /* ---------- Formatação ---------- */
@@ -228,8 +229,8 @@
   };
 
   // width: largura real do gráfico na tela, para o texto do SVG ficar no tamanho certo também no celular
-  function columnChart(items, { format = (v) => nf1.format(v), integer = false, height = 220, label = '', width = 720 } = {}) {
-    const wrap = U.h('<div class="chart"></div>');
+  function columnChart(items, { format = (v) => nf1.format(v), integer = false, height = 220, label = '', width = 720, tone = '' } = {}) {
+    const wrap = U.h(`<div class="chart${tone ? ` is-${tone}` : ''}"></div>`);
     const W = Math.max(280, Math.round(width)), H = height, P = { l: 44, r: 12, t: 26, b: 28 };
     const top = niceMax(Math.max(0, ...items.map((x) => x.value)), integer);
     const band = (W - P.l - P.r) / items.length;
@@ -301,7 +302,10 @@
         const key = shiftDay(k, dow);
         if (key > today) { cells += '<span class="heat-cell is-future" aria-hidden="true"></span>'; return; }
         const d = by[key];
-        const text = d ? `${shortDate(key)}: ${d.treinos === 1 ? '1 treino' : `${d.treinos} treinos`} · ${d.series} séries` : `${shortDate(key)}: sem treino`;
+        const parts = [];
+        if (d && d.treinos) parts.push(`${d.treinos === 1 ? '1 treino' : `${d.treinos} treinos`} · ${d.series} séries`);
+        if (d && d.cardioMin) parts.push(`cardio ${d.cardioMin} min`);
+        const text = `${shortDate(key)}: ${parts.length ? parts.join(' · ') : 'sem treino'}`;
         cells += `<span class="heat-cell" data-l="${heatLevel(d)}" tabindex="0" role="img" aria-label="${esc(text)}" data-tip="${esc(text)}"></span>`;
       });
     }

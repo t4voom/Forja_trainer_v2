@@ -41,6 +41,8 @@
   --heat-1: #664512;
   --heat-2: #AD6E0E;
   --heat-3: #FF9F0A;
+  --cardio: #FF375F;
+  --cardio-ink: #FF6482;
   --shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
   --backdrop: rgba(0, 0, 0, 0.6);
   color-scheme: dark;
@@ -71,6 +73,8 @@
   --heat-1: #DFAB7A;
   --heat-2: #D1853D;
   --heat-3: #C25E00;
+  --cardio: #FF2D55;
+  --cardio-ink: #C8003A;
   --shadow: 0 20px 50px rgba(0, 0, 0, 0.12);
   --backdrop: rgba(0, 0, 0, 0.3);
   color-scheme: light;
@@ -521,6 +525,16 @@ select.field { appearance: none; padding-right: 32px; background-image: url("dat
 .chart-foot .key { display: inline-flex; align-items: center; gap: 6px; }
 .chart-foot .key::before { content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--accent); }
 .chart-foot .key.is-current::before { opacity: 0.5; }
+/* Cardio: rosa, como no app do aluno */
+.chart.is-cardio .col { fill: var(--cardio); }
+.chart-foot.is-cardio .key::before { background: var(--cardio); }
+.cardio-dot { background: color-mix(in srgb, var(--cardio) 16%, transparent) !important; color: var(--cardio-ink) !important; }
+.cardio-acts { display: grid; gap: 12px; margin-top: 16px; }
+.cardio-act { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 6px; align-items: baseline; font-size: 13px; }
+.cardio-act-name { font-weight: 600; font-size: 14px; }
+.cardio-act-meta { color: var(--text-2); font-variant-numeric: tabular-nums; text-align: right; }
+.cardio-act-bar { grid-column: 1 / -1; height: 6px; border-radius: 4px; background: var(--surface-3); overflow: hidden; }
+.cardio-act-bar > span { display: block; height: 100%; border-radius: 4px; background: var(--cardio); }
 
 .heat { position: relative; }
 .heat-grid { display: grid; grid-template-columns: 30px repeat(var(--weeks), minmax(0, 32px)); gap: 3px; }
