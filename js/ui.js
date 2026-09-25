@@ -17,7 +17,8 @@
     key: '<circle cx="8" cy="15.5" r="3.75"/><path d="m10.75 12.75 8.5-8.5M16.5 7l2.5 2.5M14.25 9.25l1.75 1.75"/>',
     login: '<path d="M9.75 4.75h-3a2 2 0 0 0-2 2v10.5a2 2 0 0 0 2 2h3"/><path d="M14 16.25 18.25 12 14 7.75M18.25 12H8.5"/>',
     moon: '<path d="M19.5 14.5A7.75 7.75 0 0 1 9.5 4.5a7.75 7.75 0 1 0 10 10z"/>',
-    activity: '<path d="M3.75 12h3.5l2.5-6.5 4.5 13 2.5-6.5h3.5"/>'
+    activity: '<path d="M3.75 12h3.5l2.5-6.5 4.5 13 2.5-6.5h3.5"/>',
+    heartPulse: '<path d="M12 19.75S3.75 15 3.75 9.1A4.35 4.35 0 0 1 12 7.2a4.35 4.35 0 0 1 8.25 1.9C20.25 15 12 19.75 12 19.75z"/><path d="M6.75 12.25h2.5l1.5-2.5 2 4.5 1.5-2h3"/>'
   });
 
   /* ---------- Formatação ---------- */
@@ -214,5 +215,149 @@
       </div>`;
   }
 
-  global.TUI = { F, toast, modal, confirm, segmented, meterHTML, statusPill, emptyHTML, lineChart, sparkline, deltaHTML, sortRows, pagerHTML };
+  /* ---------- Gráfico de colunas (uma série) ----------
+     items: [{ label, value, note, current }] do mais antigo para o mais recente.
+     Colunas finas (até 24 px) com o topo arredondado, crescendo de uma linha de base só. Dica ao passar
+     o mouse ou focar com o teclado; o valor da última coluna fica escrito. A coluna "current"
+     (período ainda em andamento) fica mais clara. Uma tabela invisível leva os mesmos números. */
+  const niceMax = (v, integer) => {
+    if (v <= 0) return integer ? 2 : 1;
+    if (integer && v <= 10) return Math.max(2, Math.ceil(v / 2) * 2);
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    const n = v / p;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
+  };
+
+  // width: largura real do gráfico na tela, para o texto do SVG ficar no tamanho certo também no celular
+  function columnChart(items, { format = (v) => nf1.format(v), integer = false, height = 220, label = '', width = 720, tone = '' } = {}) {
+    const wrap = U.h(`<div class="chart${tone ? ` is-${tone}` : ''}"></div>`);
+    const W = Math.max(280, Math.round(width)), H = height, P = { l: 44, r: 12, t: 26, b: 28 };
+    const top = niceMax(Math.max(0, ...items.map((x) => x.value)), integer);
+    const band = (W - P.l - P.r) / items.length;
+    const bw = Math.min(24, band * 0.62);
+    const base = H - P.b;
+    const Y = (v) => P.t + (1 - v / top) * (base - P.t);
+    const X = (i) => P.l + i * band + (band - bw) / 2;
+    const grid = [0, top / 2, top].map((v) => `<line class="chart-grid" x1="${P.l}" x2="${W - P.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="chart-axis" x="${P.l - 8}" y="${Y(v) + 4}" text-anchor="end">${esc(format(v))}</text>`).join('');
+    const bar = (x, i) => {
+      if (!(x.value > 0)) return '';
+      const y = Y(x.value), h = base - y, r = Math.min(4, h, bw / 2), x0 = X(i);
+      return `<path class="col${x.current ? ' is-current' : ''}" data-i="${i}" d="M${x0},${base}V${y + r}Q${x0},${y} ${x0 + r},${y}H${x0 + bw - r}Q${x0 + bw},${y} ${x0 + bw},${y + r}V${base}Z"/>`;
+    };
+    const step = Math.ceil(items.length / Math.min(6, Math.max(2, Math.floor((W - P.l - P.r) / 56))));
+    const xLabels = items.map((x, i) => ((items.length - 1 - i) % step === 0 ? `<text class="chart-axis" x="${X(i) + bw / 2}" y="${H - 8}" text-anchor="middle">${esc(x.label)}</text>` : '')).join('');
+    const last = items[items.length - 1];
+    const lastLabel = last && last.value > 0 ? `<text class="chart-value" x="${X(items.length - 1) + bw / 2}" y="${Y(last.value) - 7}" text-anchor="middle">${esc(format(last.value))}</text>` : '';
+    wrap.innerHTML = `
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">
+        ${grid}${xLabels}${items.map(bar).join('')}${lastLabel}
+        ${items.map((x, i) => `<rect class="chart-hit" x="${P.l + i * band}" y="${P.t}" width="${band}" height="${base - P.t}" data-i="${i}" tabindex="0" aria-label="${esc(`${x.label}: ${format(x.value)}${x.note ? ` · ${x.note}` : ''}`)}"/>`).join('')}
+      </svg>
+      <div class="chart-tip" hidden></div>
+      <table class="sr-only"><caption>${esc(label)}</caption><tbody>${items.map((x) => `<tr><th>${esc(x.label)}</th><td>${esc(format(x.value))}</td></tr>`).join('')}</tbody></table>`;
+    const svg = wrap.querySelector('svg');
+    const tip = wrap.querySelector('.chart-tip');
+    const show = (i) => {
+      const x = items[i];
+      svg.querySelectorAll('.col').forEach((c) => c.classList.toggle('is-hover', c.dataset.i === String(i)));
+      tip.hidden = false;
+      tip.style.left = `${((X(i) + bw / 2) / W) * 100}%`;
+      tip.style.top = `${(Y(Math.max(x.value, 0)) / H) * svg.getBoundingClientRect().height}px`;
+      tip.innerHTML = `<strong class="num">${esc(format(x.value))}</strong>${esc(x.label)}${x.note ? ` · ${esc(x.note)}` : ''}`;
+    };
+    const hide = () => { tip.hidden = true; svg.querySelectorAll('.col.is-hover').forEach((c) => c.classList.remove('is-hover')); };
+    svg.querySelectorAll('.chart-hit').forEach((h) => {
+      h.addEventListener('mouseenter', () => show(Number(h.dataset.i)));
+      h.addEventListener('focus', () => show(Number(h.dataset.i)));
+      h.addEventListener('blur', hide);
+    });
+    svg.addEventListener('mouseleave', hide);
+    return wrap;
+  }
+
+  /* ---------- Calendário de treinos ----------
+     days: [{ dia: 'AAAA-MM-DD', treinos, series }]; from: segunda-feira da primeira semana; today: 'AAAA-MM-DD'.
+     Uma cor em três tons (validados para os temas claro e escuro): quanto mais séries no dia, mais forte. */
+  const heatLevel = (d) => (!d ? 0 : d.series >= 20 ? 3 : d.series >= 10 ? 2 : 1);
+  const shiftDay = (key, n) => new Date(new Date(`${key}T12:00:00Z`).getTime() + n * 86400000).toISOString().slice(0, 10);
+  const shortDate = (key) => new Date(`${key}T12:00:00Z`).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+
+  function heatmap(days, { from, weeks = 12, today }) {
+    const by = {};
+    days.forEach((d) => { by[d.dia] = d; });
+    const wrap = U.h('<div class="heat"></div>');
+    const cols = Array.from({ length: weeks }, (_, w) => shiftDay(from, w * 7));
+    let lastMonth = '';
+    const months = cols.map((k) => {
+      const m = new Date(`${k}T12:00:00Z`).toLocaleDateString('pt-BR', { month: 'short', timeZone: 'UTC' }).replace('.', '');
+      const show = m !== lastMonth;
+      lastMonth = m;
+      return `<span class="heat-month">${show ? esc(m) : ''}</span>`;
+    }).join('');
+    const DOW = ['Seg', '', 'Qua', '', 'Sex', '', ''];
+    let cells = '';
+    for (let dow = 0; dow < 7; dow++) {
+      cells += `<span class="heat-dow">${DOW[dow]}</span>`;
+      cols.forEach((k) => {
+        const key = shiftDay(k, dow);
+        if (key > today) { cells += '<span class="heat-cell is-future" aria-hidden="true"></span>'; return; }
+        const d = by[key];
+        const parts = [];
+        if (d && d.treinos) parts.push(`${d.treinos === 1 ? '1 treino' : `${d.treinos} treinos`} · ${d.series} séries`);
+        if (d && d.cardioMin) parts.push(`cardio ${d.cardioMin} min`);
+        const text = `${shortDate(key)}: ${parts.length ? parts.join(' · ') : 'sem treino'}`;
+        cells += `<span class="heat-cell" data-l="${heatLevel(d)}" tabindex="0" role="img" aria-label="${esc(text)}" data-tip="${esc(text)}"></span>`;
+      });
+    }
+    wrap.innerHTML = `
+      <div class="heat-grid" style="--weeks:${weeks}"><span></span>${months}${cells}</div>
+      <div class="heat-legend"><span>Menos</span>${[0, 1, 2, 3].map((l) => `<span class="heat-cell" data-l="${l}" aria-hidden="true"></span>`).join('')}<span>Mais séries</span></div>
+      <div class="chart-tip" hidden></div>`;
+    const tip = wrap.querySelector('.chart-tip');
+    const show = (c) => {
+      const r = c.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+      tip.hidden = false;
+      tip.style.left = `${r.left - w.left + r.width / 2}px`;
+      tip.style.top = `${r.top - w.top}px`;
+      tip.textContent = c.dataset.tip;
+    };
+    wrap.querySelectorAll('.heat-grid .heat-cell[data-tip]').forEach((c) => {
+      c.addEventListener('mouseenter', () => show(c));
+      c.addEventListener('focus', () => show(c));
+      c.addEventListener('mouseleave', () => { tip.hidden = true; });
+      c.addEventListener('blur', () => { tip.hidden = true; });
+    });
+    return wrap;
+  }
+
+  /* ---------- Barras com faixa de referência ----------
+     rows: [{ label, value, min, max }]. A faixa recomendada fica atrás, em cinza; a barra é o valor.
+     O valor fica escrito e a situação vai num selo com texto (nunca só pela cor). */
+  function rangeBars(rows, { format = (v) => nf1.format(v), scaleMax } = {}) {
+    const end = scaleMax || Math.max(1, ...rows.map((r) => Math.max(r.value, r.max)));
+    const pct = (v) => `${Math.min(100, (v / end) * 100).toFixed(1)}%`;
+    const status = (r) => (r.value === 0 ? ['is-warn', 'Sem treino'] : r.value < r.min ? ['is-warn', 'Abaixo'] : r.value > r.max ? ['is-info', 'Acima'] : ['is-success', 'Na faixa']);
+    return `<ul class="rbars">${rows.map((r) => {
+      const [tone, text] = status(r);
+      return `
+        <li class="rbar">
+          <span class="rbar-label">${esc(r.label)}</span>
+          <span class="rbar-track" aria-hidden="true"><span class="rbar-range" style="left:${pct(r.min)};width:calc(${pct(r.max)} - ${pct(r.min)})"></span><span class="rbar-fill" style="width:${pct(r.value)}"></span></span>
+          <span class="rbar-value num">${esc(format(r.value))}</span>
+          <span class="pill no-dot ${tone}">${text}</span>
+        </li>`;
+    }).join('')}</ul>`;
+  }
+
+  // Mini gráfico de uma série de números (com ponto no último valor)
+  function sparkValues(values) {
+    if (values.length < 2) return '';
+    const min = Math.min(...values), max = Math.max(...values);
+    const pts = values.map((v, i) => [(i / (values.length - 1)) * 92 + 2, max === min ? 14 : 24 - ((v - min) / (max - min)) * 20]);
+    const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
+    const [lx, ly] = pts[pts.length - 1];
+    return `<svg class="spark" viewBox="0 0 96 28" aria-hidden="true"><path d="${d}"/><circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="3"/></svg>`;
+  }
+
+  global.TUI = { F, toast, modal, confirm, segmented, meterHTML, statusPill, emptyHTML, lineChart, sparkline, deltaHTML, sortRows, pagerHTML, columnChart, heatmap, rangeBars, sparkValues, shiftDay };
 })(window);

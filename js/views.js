@@ -256,7 +256,114 @@
   /* ==========================================================================
      Perfil do aluno
      ========================================================================== */
-  const studentTab = { value: 'dados' };
+  const studentTab = { value: 'visao' };
+  const weeklyMeasure = { value: 'treinos' };
+  const DAY = 86400000;
+
+  // Mesmas faixas e regras do "Equilíbrio muscular" do app (js/balance.js do FORJA):
+  // séries de trabalho por semana (média de 4 semanas); músculos auxiliares contam meia série.
+  const MUSCLES = ['Peito', 'Costas', 'Ombros', 'Bíceps', 'Tríceps', 'Quadríceps', 'Posterior', 'Glúteos', 'Panturrilha', 'Abdômen'];
+  const TARGETS = {
+    'Peito': [10, 20], 'Costas': [10, 20], 'Ombros': [8, 16], 'Bíceps': [6, 14], 'Tríceps': [6, 14],
+    'Quadríceps': [10, 18], 'Posterior': [6, 14], 'Glúteos': [6, 14], 'Panturrilha': [6, 12], 'Abdômen': [4, 12]
+  };
+  const SECONDARY = {
+    'press-horizontal': ['Tríceps', 'Ombros'], 'press-inclinado': ['Ombros', 'Tríceps'], 'press-declinado': ['Tríceps'],
+    'press-vertical': ['Tríceps'], 'close-press': ['Peito'], 'dip': ['Peito'],
+    'pulldown': ['Bíceps'], 'row': ['Bíceps', 'Ombros'],
+    'squat': ['Glúteos'], 'leg-press': ['Glúteos'], 'lunge': ['Glúteos'],
+    'hinge': ['Posterior', 'Glúteos'], 'hip-thrust': ['Posterior']
+  };
+  function weeklyMuscleSets(list) {
+    const out = Object.fromEntries(MUSCLES.map((m) => [m, 0]));
+    (list || []).forEach((x) => {
+      const info = global.Exercises.get(x.exerciseId);
+      const muscle = (info && info.muscle) || x.musculo;
+      if (muscle in out) out[muscle] += x.series;
+      (SECONDARY[info && info.pattern] || []).forEach((m) => { if (m !== muscle && m in out) out[m] += x.series * 0.5; });
+    });
+    MUSCLES.forEach((m) => { out[m] = Math.round((out[m] / 4) * 2) / 2; });
+    return out;
+  }
+
+  // Cardio registrado no app (mesmos ids de js/cardio.js do FORJA)
+  const CARDIO = { esteira: 'Esteira', corrida: 'Corrida', caminhada: 'Caminhada', bike: 'Bike ergométrica', pedal: 'Pedal', eliptico: 'Elíptico', escada: 'Escada', remo: 'Remo', natacao: 'Natação', corda: 'Pular corda', aula: 'Aula', outro: 'Outro' };
+  const CARDIO_PACE = { esteira: 'km', corrida: 'km', caminhada: 'km', remo: '500m', natacao: '100m' };
+  const cardioName = (x) => (x.atividade === 'outro' && x.nome ? x.nome : CARDIO[x.atividade] || 'Cardio');
+  const minText = (min) => (min < 60 ? `${Math.round(min)} min` : `${Math.floor(min / 60)}h${Math.round(min % 60) ? ` ${String(Math.round(min % 60)).padStart(2, '0')}min` : ''}`);
+  const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+  function cardioMeta(x) {
+    const out = [minText(x.duracaoSeg / 60)];
+    if (x.distanciaKm) {
+      const inMeters = (x.atividade === 'natacao' || x.atividade === 'remo') && x.distanciaKm < 10;
+      out.push(inMeters ? `${F.num(Math.round(x.distanciaKm * 1000))} m` : `${F.num(x.distanciaKm)} km`);
+      const perKm = x.duracaoSeg / x.distanciaKm;
+      const pace = CARDIO_PACE[x.atividade];
+      out.push(pace === 'km' ? `${mmss(perKm)}/km` : pace === '500m' ? `${mmss(perKm / 2)}/500 m` : pace === '100m' ? `${mmss(perKm / 10)}/100 m` : `${F.num(Math.round((x.distanciaKm / (x.duracaoSeg / 3600)) * 10) / 10)} km/h`);
+    }
+    if (x.rpe) out.push(`RPE ${x.rpe}`);
+    return out.join(' · ');
+  }
+
+  const daysSince = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / DAY)) : null);
+  const volumeText = (kg) => (kg >= 1000 ? `${F.num(Math.round(kg / 100) / 10)} t` : `${F.num(Math.round(kg))} kg`);
+  const exName = (e) => ((global.Exercises.get(e.exerciseId) || {}).name || e.nome || e.exerciseId);
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  // Variação em que subir é bom (treinos, volume, carga): sinal + cor
+  const goodDelta = (v, unit = '') => (v == null ? '' : `<span class="delta ${v > 0 ? 'is-good' : v < 0 ? 'is-bad' : ''}">${v > 0 ? '+' : v < 0 ? '−' : '±'}${F.num(Math.abs(v))}${unit}</span>`);
+  const pctDelta = (now, before) => (before > 0 ? goodDelta(Math.round(((now - before) / before) * 100), '%') : '');
+  const weekLabel = (key) => new Date(`${key}T12:00:00Z`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
+
+  // Pontos de atenção: o que o treinador deveria olhar primeiro (e o que merece um parabéns)
+  function insightsOf(d, a, muscles) {
+    const r = a.resumo, out = [];
+    // Última atividade: treino de musculação ou cardio (o cardio também conta como treinar)
+    const lastAny = [r.ultimoTreino, r.ultimoCardio].filter(Boolean).sort().pop() || '';
+    const days = daysSince(lastAny);
+    const lastWhat = lastAny && lastAny === r.ultimoCardio && lastAny !== r.ultimoTreino ? 'Último cardio' : 'Último treino';
+    if (!r.totalTreinos && !r.ultimoCardio) out.push({ nivel: 'info', icon: 'info', texto: 'Ainda não registrou nenhum treino no app.', sub: 'Os números aparecem aqui assim que o aluno concluir o primeiro treino.' });
+    else if (days >= 14) out.push({ nivel: 'erro', icon: 'alert', texto: `Sem treinar há ${days} dias.`, sub: `${lastWhat} em ${F.date(lastAny)}. Vale mandar uma mensagem.` });
+    else if (days >= 7) out.push({ nivel: 'aviso', icon: 'alert', texto: `Sem treinar há ${days} dias.`, sub: `${lastWhat} em ${F.date(lastAny)}.` });
+    else if (r.totalTreinos && daysSince(r.ultimoTreino) >= 14 && r.ultimoCardio) out.push({ nivel: 'info', icon: 'heartPulse', texto: `Só cardio nos últimos ${daysSince(r.ultimoTreino)} dias.`, sub: `Sem musculação desde ${F.date(r.ultimoTreino)}.` });
+    if (r.treinos30Anterior >= 4 && r.treinos30 <= r.treinos30Anterior * 0.6) {
+      out.push({ nivel: 'aviso', icon: 'alert', texto: 'A frequência caiu.', sub: `${plural(r.treinos30, 'treino', 'treinos')} nos últimos 30 dias, contra ${r.treinos30Anterior} nos 30 anteriores.` });
+    }
+    d.treinos.filter((w) => w.managed && daysSince(w.createdAt) >= 7).forEach((w) => {
+      const u = a.treinosUso[w.id];
+      if (!u) out.push({ nivel: 'aviso', icon: 'dumbbell', texto: `“${w.name}” ainda não foi feito.`, sub: `Montado ${F.ago(w.createdAt)}.` });
+      else if (!u.vezes30) out.push({ nivel: 'aviso', icon: 'dumbbell', texto: `“${w.name}” não foi feito nos últimos 30 dias.`, sub: `Última vez ${F.ago(u.ultimo)}.` });
+    });
+    if (r.rpeMedio30 >= 9 && r.rpeAvaliados30 >= 3) out.push({ nivel: 'aviso', icon: 'flame', texto: `Esforço médio alto: RPE ${F.num(r.rpeMedio30)} de 10.`, sub: `Nos ${r.rpeAvaliados30} treinos avaliados dos últimos 30 dias. Pode ser sinal de cansaço acumulado.` });
+    // Servidor sem "estagnados" (versão anterior): só os exercícios do painel
+    const stalled = a.estagnados || a.exercicios.filter((e) => e.estagnado);
+    if (stalled.length <= 2) {
+      stalled.forEach((e) => {
+        out.push({ nivel: 'info', icon: 'chart', texto: `${exName(e)}: sem ${e.medida === 'carga' ? 'aumentar a carga' : 'aumentar as repetições'} há ${e.semanasSemRecorde} semanas.`, sub: `${plural(e.treinosSemRecorde, 'treino', 'treinos')} desde o recorde de ${F.num(e.recorde)} ${e.medida === 'carga' ? 'kg' : 'reps'}. Talvez seja hora de ajustar.` });
+      });
+    } else {
+      out.push({ nivel: 'info', icon: 'chart', texto: `${stalled.length} exercícios sem evolução há 3 semanas ou mais.`, sub: `${stalled.map((e) => `${exName(e)} (${e.semanasSemRecorde} sem.)`).join(' · ')}. Talvez seja hora de ajustar.` });
+    }
+    if (r.treinos30 >= 4) {
+      const none = MUSCLES.filter((m) => !muscles[m]);
+      if (none.length) out.push({ nivel: 'info', icon: 'target', texto: `Sem séries nas últimas 4 semanas: ${none.join(', ')}.` });
+    }
+    const pesos = d.pesos || [];
+    if (pesos.length > 1) {
+      const last = pesos[pesos.length - 1];
+      const base = pesos.filter((p) => new Date(p.data).getTime() <= new Date(last.data).getTime() - 30 * DAY).pop() || pesos[0];
+      const diff = Math.round((last.pesoKg - base.pesoKg) * 10) / 10;
+      if (base !== last && Math.abs(diff) >= 2) out.push({ nivel: 'info', icon: 'scale', texto: `Peso ${diff > 0 ? 'subiu' : 'caiu'} ${F.num(Math.abs(diff))} kg desde ${F.date(base.data)}.`, sub: `De ${F.kg(base.pesoKg)} para ${F.kg(last.pesoKg)}.` });
+    }
+    if (a.recordes.length) {
+      const by = {};
+      a.recordes.forEach((x) => { const k = by[x.exerciseId]; if (!k) by[x.exerciseId] = Object.assign({}, x); else k.antes = Math.min(k.antes, x.antes); });
+      const list = Object.values(by);
+      out.push({ nivel: 'sucesso', icon: 'trophy', texto: `${plural(a.recordes.length, 'recorde', 'recordes')} nos últimos 30 dias.`, sub: list.slice(0, 3).map((x) => `${exName(x)}: ${F.num(x.antes)} → ${F.num(x.agora)} ${x.porCarga ? 'kg' : 'reps'}`).join(' · ') });
+    }
+    if (!out.length) out.push({ nivel: 'sucesso', icon: 'check', texto: 'Nada preocupante por aqui.', sub: 'Treinos em dia e sem sinais de estagnação.' });
+    const ORDER = { erro: 0, aviso: 1, info: 2, sucesso: 3 };
+    return out.sort((x, y) => ORDER[x.nivel] - ORDER[y.nivel]).slice(0, 7);
+  }
 
   async function student(ctx, userId) {
     ctx.setCrumbs([{ label: 'Alunos', href: 'alunos' }, { label: 'Carregando…' }]);
@@ -266,12 +373,16 @@
     if (!ctx.alive()) return;
     global.Store.setCustomExercises(d.exerciciosPersonalizados);
     const a = d.aluno;
+    const an = d.analise || null; // servidor antigo (Code.gs ainda não atualizado): sem painel
     ctx.setCrumbs([{ label: 'Alunos', href: 'alunos' }, { label: a.nome }]);
     const canEdit = API.can('treinos.editar');
     const canUnlink = API.can('alunos.desvincular');
     const pesos = d.pesos || [];
     const first = pesos[0], last = pesos[pesos.length - 1];
     const variation = first && last && pesos.length > 1 ? Math.round((last.pesoKg - first.pesoKg) * 10) / 10 : null;
+    const muscles = an ? weeklyMuscleSets(an.seriesExercicio28) : null;
+    const TAB_LABELS = [['visao', 'Visão geral'], ['treinos', `Treinos · ${d.treinos.length}`], ['historico', 'Histórico'], ['evolucao', 'Peso'], ['dados', 'Dados'], ['alteracoes', 'Alterações']];
+    if (!TAB_LABELS.some(([v]) => v === studentTab.value)) studentTab.value = 'visao';
 
     ctx.el.innerHTML = `
       <div class="page-head">
@@ -288,7 +399,7 @@
         </div>
       </div>
       <div class="tabs" role="tablist">
-        ${[['dados', 'Dados'], ['evolucao', 'Evolução'], ['treinos', `Treinos · ${d.treinos.length}`], ['atividade', 'Atividade']].map(([v, l]) => `<button type="button" role="tab" data-tab="${v}" aria-selected="${studentTab.value === v}">${l}</button>`).join('')}
+        ${TAB_LABELS.map(([v, l]) => `<button type="button" role="tab" data-tab="${v}" aria-selected="${studentTab.value === v}">${l}</button>`).join('')}
       </div>
       <div data-tab-body></div>`;
 
@@ -303,7 +414,161 @@
         <div class="stat"><p class="stat-label">Data de entrada</p><p class="stat-value" style="font-size:16px">${esc(F.date(a.dataEntrada))}</p></div>
       </div>`;
 
+    function overviewHTML() {
+      if (!an) return `<section class="card">${TUI.emptyHTML('refresh', 'Painel indisponível', 'O painel do aluno precisa da versão nova do servidor. Publique o Code.gs atualizado (Implantar › Nova versão).')}</section>`;
+      const r = an.resumo;
+      const days = daysSince(r.ultimoTreino);
+      const lastS = an.sessoes[0];
+      const insights = insightsOf(d, an, muscles);
+      const trained12 = an.semanas.reduce((n, w) => n + w.treinos, 0);
+      const cardioDays12 = an.dias.filter((x) => x.cardioMin).length;
+      const cardio = an.cardio && an.cardio.total ? an.cardio : null;
+      const acts = cardio ? cardio.porAtividade30 : [];
+      const maxAct = Math.max(1, ...acts.map((x) => x.minutos));
+      const tile = (e) => {
+        const pts = e.pontos, lp = pts[pts.length - 1], fp = pts[0];
+        const unit = e.medida === 'carga' ? 'kg' : 'reps';
+        return `
+          <article class="ex-tile">
+            <p class="ex-tile-name truncate" title="${esc(exName(e))}">${esc(exName(e))}</p>
+            <p class="ex-tile-sub">${esc(e.musculo || '—')} · ${plural(e.treinos90, 'treino', 'treinos')} em 90 dias</p>
+            <div class="ex-tile-row"><p class="ex-tile-value">${F.num(lp.valor)}<small>${unit}</small></p>${TUI.sparkValues(pts.map((p) => p.valor))}</div>
+            <p class="ex-tile-foot">${pts.length > 1 ? `${goodDelta(Math.round((lp.valor - fp.valor) * 10) / 10, ` ${unit}`)}<span>desde ${esc(F.date(fp.data))}</span>` : '<span>Primeiro registro</span>'}<span>· recorde ${F.num(e.recorde)} ${unit}</span></p>
+            ${e.estagnado ? `<span class="pill is-warn no-dot">Sem evolução há ${e.semanasSemRecorde} semanas</span>` : ''}
+          </article>`;
+      };
+      return `
+        <div class="grid kpis">
+          <section class="card kpi"><p class="kpi-label">${icon('dumbbell', { size: 16 })} Treinos · 30 dias</p><p class="kpi-value">${r.treinos30}</p><p class="kpi-foot">${r.treinos30 || r.treinos30Anterior ? `${goodDelta(r.treinos30 - r.treinos30Anterior)} vs 30 dias anteriores` : 'Nenhum treino no período'}</p></section>
+          <section class="card kpi"><p class="kpi-label">${icon('calendar', { size: 16 })} Frequência</p><p class="kpi-value">${F.num(r.frequencia4)}<small>/ semana</small></p><p class="kpi-foot">Média das últimas 4 semanas${r.semanasSeguidas >= 2 ? ` · ${r.semanasSeguidas} semanas seguidas` : ''}</p></section>
+          <section class="card kpi"><p class="kpi-label">${icon('activity', { size: 16 })} Último treino</p><p class="kpi-value">${days == null ? '—' : days === 0 ? 'Hoje' : days === 1 ? 'Ontem' : `${days}<small>dias</small>`}</p><p class="kpi-foot truncate">${lastS ? `${esc(lastS.treino)} · ${esc(F.date(lastS.data))}` : 'Nenhum treino registrado'}</p></section>
+          <section class="card kpi"><p class="kpi-label">${icon('chart', { size: 16 })} Volume · 30 dias</p><p class="kpi-value">${r.volume30 >= 1000 ? `${F.num(Math.round(r.volume30 / 100) / 10)}<small>t</small>` : `${F.num(r.volume30)}<small>kg</small>`}</p><p class="kpi-foot">${r.volume30Anterior ? `${pctDelta(r.volume30, r.volume30Anterior)} vs 30 dias anteriores` : 'Carga × repetições das séries feitas'}</p></section>
+        </div>
+        <div class="grid cols-main mt-4">
+          <section class="card">
+            <div class="card-head is-wrap"><div><h2 class="card-title">Semana a semana</h2><p class="card-sub">Últimas 12 semanas</p></div><span data-measure></span></div>
+            <div class="card-body">
+              <div data-weekly></div>
+              <div class="chart-foot" data-weekly-foot><span class="key">Semana completa</span><span class="key is-current">Semana atual, em andamento</span></div>
+              <div class="stats is-4 mt-4">
+                <div class="stat"><p class="stat-label">Séries · 30 dias</p><p class="stat-value">${F.num(r.series30)}</p></div>
+                <div class="stat"><p class="stat-label">Duração média</p><p class="stat-value">${r.duracaoMedia30 ? `${Math.round(r.duracaoMedia30 / 60)}<small>min</small>` : '—'}</p></div>
+                <div class="stat"><p class="stat-label">Esforço médio</p><p class="stat-value">${r.rpeMedio30 != null ? `${F.num(r.rpeMedio30)}<small>/ 10</small>` : '—'}</p><p class="stat-note">${r.rpeAvaliados30 ? `RPE de ${plural(r.rpeAvaliados30, 'treino', 'treinos')}` : 'O aluno não avaliou'}</p></div>
+                <div class="stat"><p class="stat-label">Total de treinos</p><p class="stat-value">${F.num(r.totalTreinos)}</p><p class="stat-note">${r.primeiroTreino ? `Desde ${esc(F.date(r.primeiroTreino))}` : '—'}</p></div>
+              </div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="card-head"><h2 class="card-title">Pontos de atenção</h2></div>
+            <div class="card-body">${insights.map((x) => `<div class="alert is-${x.nivel}">${icon(x.icon, { size: 16, stroke: 2 })}<div><p>${esc(x.texto)}</p>${x.sub ? `<p class="alert-sub">${esc(x.sub)}</p>` : ''}</div></div>`).join('')}</div>
+          </section>
+        </div>
+        <div class="grid cols-2 mt-4">
+          <section class="card">
+            <div class="card-head"><div><h2 class="card-title">Dias de treino</h2><p class="card-sub">${plural(trained12, 'treino', 'treinos')}${cardioDays12 ? ` e ${plural(cardioDays12, 'dia', 'dias')} com cardio` : ''} nas últimas 12 semanas</p></div></div>
+            <div class="card-body"><div data-heat></div>${cardioDays12 ? '<p class="chart-foot">Dias só com cardio ficam no tom mais claro.</p>' : ''}</div>
+          </section>
+          <section class="card">
+            <div class="card-head"><div><h2 class="card-title">Séries por músculo</h2><p class="card-sub">Por semana, na média das últimas 4 semanas</p></div></div>
+            <div class="card-body">
+              ${TUI.rangeBars(MUSCLES.map((m) => ({ label: m, value: muscles[m], min: TARGETS[m][0], max: TARGETS[m][1] })), { scaleMax: Math.max(22, ...MUSCLES.map((m) => muscles[m])) })}
+              <div class="chart-foot"><span class="rbars-key">Faixa recomendada</span><span>Exercícios auxiliares contam meia série, como no app.</span></div>
+            </div>
+          </section>
+        </div>
+        ${cardio ? `
+        <section class="card mt-4">
+          <div class="card-head"><div><h2 class="card-title">Cardio</h2><p class="card-sub">Últimos 30 dias · registrado pelo aluno no app</p></div></div>
+          <div class="card-body">
+            <div class="stats is-4">
+              <div class="stat"><p class="stat-label">Atividades</p><p class="stat-value">${F.num(r.cardio30 || 0)}</p></div>
+              <div class="stat"><p class="stat-label">Tempo</p><p class="stat-value">${r.cardioMin30 ? minText(r.cardioMin30).replace(/ min$/, '<small>min</small>') : '—'}</p><p class="stat-note">${r.cardioMin30 || r.cardioMin30Anterior ? `${goodDelta(r.cardioMin30 - r.cardioMin30Anterior, ' min')} vs 30 dias anteriores` : ''}</p></div>
+              <div class="stat"><p class="stat-label">Distância</p><p class="stat-value">${r.cardioKm30 ? `${F.num(r.cardioKm30)}<small>km</small>` : '—'}</p></div>
+              <div class="stat"><p class="stat-label">Último cardio</p><p class="stat-value" style="font-size:16px">${esc(F.ago(r.ultimoCardio))}</p><p class="stat-note">${esc(F.date(r.ultimoCardio))}</p></div>
+            </div>
+            ${acts.length ? `<div class="cardio-acts">${acts.map((x) => `
+              <div class="cardio-act">
+                <span class="cardio-act-name">${esc(cardioName(x))}</span>
+                <span class="cardio-act-meta">${plural(x.vezes, 'vez', 'vezes')} · ${minText(x.minutos)}${x.distanciaKm ? ` · ${F.num(x.distanciaKm)} km` : ''}</span>
+                <span class="cardio-act-bar" aria-hidden="true"><span style="width:${Math.max(3, Math.round((x.minutos / maxAct) * 100))}%"></span></span>
+              </div>`).join('')}</div>` : '<p class="card-sub mt-4">Nenhum cardio nos últimos 30 dias.</p>'}
+          </div>
+        </section>` : ''}
+        <section class="card mt-4">
+          <div class="card-head"><div><h2 class="card-title">Progressão de carga</h2><p class="card-sub">Carga máxima de cada treino nos exercícios mais feitos (sem carga: repetições)</p></div></div>
+          <div class="card-body">${an.exercicios.length ? `<div class="ex-tiles">${an.exercicios.map(tile).join('')}</div>` : TUI.emptyHTML('chart', 'Sem exercícios nos últimos 90 dias', 'A progressão aparece quando o aluno registrar treinos no app.')}</div>
+        </section>`;
+    }
+
+    const MEASURES = {
+      treinos: { label: 'Treinos', aria: 'Treinos por semana', integer: true, format: (v) => F.num(v) },
+      series: { label: 'Séries', aria: 'Séries por semana', integer: true, format: (v) => F.num(v) },
+      volume: { label: 'Volume', aria: 'Volume por semana (carga × repetições)', integer: false, format: volumeText }
+    };
+    if (an && an.semanas.some((w) => w.cardioMin > 0)) MEASURES.cardioMin = { label: 'Cardio', aria: 'Minutos de cardio por semana', integer: true, format: (v) => `${F.num(v)} min` };
+    if (!MEASURES[weeklyMeasure.value]) weeklyMeasure.value = 'treinos';
+    function paintWeekly() {
+      const host = body.querySelector('[data-weekly]');
+      if (!host) return;
+      const m = MEASURES[weeklyMeasure.value];
+      const isCardio = weeklyMeasure.value === 'cardioMin';
+      body.querySelector('[data-weekly-foot]')?.classList.toggle('is-cardio', isCardio);
+      const items = an.semanas.map((w, i) => ({ label: weekLabel(w.inicio), value: w[weeklyMeasure.value], note: i === an.semanas.length - 1 ? 'semana atual' : `semana de ${weekLabel(w.inicio)}`, current: i === an.semanas.length - 1 }));
+      host.replaceChildren(TUI.columnChart(items, { format: m.format, integer: m.integer, label: `${m.aria} nas últimas 12 semanas`, width: host.clientWidth || 720, tone: isCardio ? 'cardio' : '' }));
+      // Redesenha quando a largura muda (janela redimensionada, celular girado)
+      if (!host.resizer && global.ResizeObserver) {
+        let w = host.clientWidth;
+        host.resizer = new ResizeObserver(() => { if (Math.abs(host.clientWidth - w) > 24) { w = host.clientWidth; paintWeekly(); } });
+        host.resizer.observe(host);
+      }
+    }
+
+    function historyHTML() {
+      if (!an) return `<section class="card">${TUI.emptyHTML('refresh', 'Histórico indisponível', 'Publique o Code.gs atualizado para ver o histórico detalhado.')}</section>`;
+      // Musculação (as 30 mais recentes) e cardio (os 15 mais recentes), em ordem de data
+      const cardioList = (an.cardio && an.cardio.recentes) || [];
+      const oldestSession = an.sessoes.length === 30 ? an.sessoes[29].data : '';
+      const items = an.sessoes.map((x, i) => ({ kind: 'session', data: x.data, x, i }))
+        .concat(cardioList.filter((c) => c.data >= oldestSession).map((c) => ({ kind: 'cardio', data: c.data, x: c })))
+        .sort((a, b) => (a.data < b.data ? 1 : -1));
+      const sub = an.sessoes.length || cardioList.length
+        ? `${an.sessoes.length ? `${plural(an.sessoes.length, 'treino mais recente', 'treinos mais recentes')}. Clique num treino para ver séries e cargas.` : ''}${cardioList.length ? ' O cardio aparece junto.' : ''}`.trim()
+        : 'Registrados pelo aluno no app';
+      return `
+        <section class="card">
+          <div class="card-head"><div><h2 class="card-title">Treinos realizados</h2><p class="card-sub">${sub}</p></div></div>
+          <div class="card-body is-flush">
+            ${items.length ? `<ul class="list">${items.map(({ kind, x, i }) => (kind === 'cardio' ? `
+              <li>
+                <span class="timeline-dot cardio-dot">${icon('heartPulse', { size: 14, stroke: 2 })}</span>
+                <div class="list-main"><p class="list-title">${esc(cardioName(x))} <span class="pill no-dot">Cardio</span></p><p class="list-sub">${esc(cardioMeta(x))}</p></div>
+                <span class="list-meta">${esc(F.dateTime(x.data))}</span>
+                <span style="width:16px" aria-hidden="true"></span>
+              </li>` : `
+              <li class="is-link" data-session="${i}" tabindex="0" role="button" aria-label="Ver detalhes do treino ${esc(x.treino)} de ${esc(F.date(x.data))}">
+                <span class="timeline-dot is-success">${icon('check', { size: 14, stroke: 2.2 })}</span>
+                <div class="list-main"><p class="list-title">${esc(x.treino)}</p><p class="list-sub">${plural(x.exercicios.length, 'exercício', 'exercícios')} · ${plural(x.series, 'série', 'séries')} · ${volumeText(x.volume)}${x.duracaoSeg ? ` · ${Math.round(x.duracaoSeg / 60)} min` : ''}${x.rpe ? ` · RPE ${x.rpe}` : ''}</p></div>
+                <span class="list-meta">${esc(F.dateTime(x.data))}</span>
+                ${icon('chevronRight', { size: 16, cls: 'faint' })}
+              </li>`)).join('')}</ul>`
+              : TUI.emptyHTML('dumbbell', 'Nenhum treino registrado', 'Quando o aluno concluir um treino no app, ele aparece aqui.')}
+          </div>
+        </section>`;
+    }
+
+    function openSession(x) {
+      const sets = (e) => e.series.map((st) => `<span class="sess-set${st.aquecimento ? ' is-warmup' : ''}">${st.kg ? `${F.num(st.kg)} kg × ${st.reps ?? '—'}` : `${st.reps ?? '—'} reps`}${st.aquecimento ? ' · aquec.' : ''}</span>`).join('');
+      const content = U.h(`<div>${x.exercicios.map((e) => `
+        <div class="sess-ex">
+          <p class="sess-ex-name">${esc(exName(e))}</p>
+          ${e.musculo ? `<p class="card-sub">${esc(e.musculo)}</p>` : ''}
+          <div class="sess-sets">${e.series.length ? sets(e) : '<span class="faint">Nenhuma série concluída</span>'}</div>
+        </div>`).join('') || '<p class="faint">Nenhum exercício registrado.</p>'}</div>`);
+      TUI.modal({ title: x.treino, sub: `${F.dateTime(x.data)} · ${plural(x.series, 'série', 'séries')} · ${volumeText(x.volume)}${x.duracaoSeg ? ` · ${Math.round(x.duracaoSeg / 60)} min` : ''}${x.rpe ? ` · esforço ${x.rpe}/10` : ''}`, body: content });
+    }
+
     const TABS = {
+      visao: overviewHTML,
       dados: () => `
         <div class="grid cols-main">
           <section class="card"><div class="card-head"><h2 class="card-title">Dados físicos</h2><span class="card-sub">Informados pelo aluno no app</span></div><div class="card-body">${statsHTML}
@@ -312,7 +577,7 @@
             <section class="card"><div class="card-head"><h2 class="card-title">Resumo</h2></div><div class="card-body">
               <dl class="dl">
                 <dt>Treinos</dt><dd>${d.treinos.length} (${d.treinos.filter((w) => w.managed).length} do treinador)</dd>
-                <dt>Treinos feitos</dt><dd>${d.sessoes.length ? `${d.sessoes.length >= 12 ? '12+' : d.sessoes.length} · último ${esc(F.ago(d.sessoes[0].data))}` : 'Nenhum registrado'}</dd>
+                <dt>Treinos feitos</dt><dd>${an ? `${an.resumo.totalTreinos}${an.resumo.ultimoTreino ? ` · último ${esc(F.ago(an.resumo.ultimoTreino))}` : ''}` : d.sessoes.length ? `${d.sessoes.length >= 12 ? '12+' : d.sessoes.length} · último ${esc(F.ago(d.sessoes[0].data))}` : 'Nenhum registrado'}</dd>
                 <dt>Variação de peso</dt><dd>${variation != null ? TUI.deltaHTML(variation) : '—'}</dd>
                 <dt>Última atualização</dt><dd>${esc(F.ago(a.ultimaAtualizacao))}</dd>
               </dl></div></section>
@@ -337,22 +602,28 @@
             </div></section>
           </div>
         </div>`,
-      treinos: () => workoutsTabHTML(d, canEdit),
-      atividade: () => `
-        <div class="grid cols-2">
-          <section class="card"><div class="card-head"><div><h2 class="card-title">Alterações de treino</h2><p class="card-sub">Feitas por treinadores desta academia</p></div></div><div class="card-body">${timelineHTML(d.alteracoes, { withStudent: false })}</div></section>
-          <section class="card"><div class="card-head"><div><h2 class="card-title">Treinos realizados</h2><p class="card-sub">Últimos registrados no app</p></div></div><div class="card-body is-flush">
-            ${d.sessoes.length ? `<ul class="list">${d.sessoes.map((s) => `
-              <li><span class="timeline-dot is-success">${icon('check', { size: 14, stroke: 2.2 })}</span><div class="list-main"><p class="list-title">${esc(s.treino || 'Treino')}</p><p class="list-sub">${s.exercicios} exercícios · ${s.series} séries${s.duracaoSeg ? ` · ${Math.round(s.duracaoSeg / 60)} min` : ''}</p></div><span class="list-meta">${esc(F.dateTime(s.data))}</span></li>`).join('')}</ul>`
-              : TUI.emptyHTML('dumbbell', 'Nenhum treino registrado', 'Quando o aluno concluir um treino no app, ele aparece aqui.')}
-          </div></section>
-        </div>`
+      treinos: () => workoutsTabHTML(d, canEdit, an),
+      historico: historyHTML,
+      alteracoes: () => `
+        <section class="card"><div class="card-head"><div><h2 class="card-title">Alterações de treino</h2><p class="card-sub">Feitas por treinadores desta academia</p></div></div><div class="card-body">${timelineHTML(d.alteracoes, { withStudent: false })}</div></section>`
     };
 
     function paintTab() {
       body.innerHTML = TABS[studentTab.value]();
       const chart = body.querySelector('[data-chart]');
       if (chart) chart.appendChild(TUI.lineChart(pesos));
+      const measure = body.querySelector('[data-measure]');
+      if (measure && an) {
+        measure.replaceWith(TUI.segmented(Object.entries(MEASURES).map(([value, m]) => ({ value, label: m.label })), weeklyMeasure.value, (v) => { weeklyMeasure.value = v; paintWeekly(); }, 'Medida do gráfico'));
+        paintWeekly();
+      }
+      const heat = body.querySelector('[data-heat]');
+      if (heat && an) heat.appendChild(TUI.heatmap(an.dias, { from: an.semanas[0].inicio, weeks: an.semanas.length, today: an.hoje }));
+      body.querySelectorAll('[data-session]').forEach((li) => {
+        const open = () => openSession(an.sessoes[Number(li.dataset.session)]);
+        li.addEventListener('click', open);
+        li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+      });
       bindWorkoutCards(body, ctx, d, a);
     }
     ctx.el.querySelector('.tabs').addEventListener('click', (e) => {
@@ -370,7 +641,13 @@
     paintTab();
   }
 
-  function workoutsTabHTML(d, canEdit) {
+  function workoutsTabHTML(d, canEdit, an) {
+    const usage = (w) => {
+      if (!an) return '';
+      const u = an.treinosUso[w.id];
+      if (!u) return '<p class="wcard-use">Ainda não foi feito pelo aluno</p>';
+      return `<p class="wcard-use">Feito ${u.vezes30}× nos últimos 30 dias · última vez ${esc(F.ago(u.ultimo))}</p>`;
+    };
     if (!d.treinos.length) {
       return `<section class="card">${TUI.emptyHTML('dumbbell', 'Nenhum treino ainda', canEdit ? 'Monte o primeiro treino. Ele aparece no app do aluno no próximo acesso.' : '')}${canEdit ? `<div class="card-foot" style="text-align:center"><a class="btn btn-primary" href="#/alunos/${esc(d.aluno.id)}/treinos/novo">${icon('plus', { size: 16, stroke: 2 })} Novo treino</a></div>` : ''}</section>`;
     }
@@ -385,6 +662,7 @@
             <div class="min-w-0" style="flex:1">
               <div class="between"><h3 class="wcard-title truncate">${esc(w.name)}</h3>${w.managed ? '<span class="pill is-accent no-dot">Treinador</span>' : '<span class="pill no-dot">Criado pelo aluno</span>'}</div>
               <p class="wcard-sub truncate">${esc(w.muscleGroup || w.description || [...new Set(exs.map((x) => x.muscle).filter(Boolean))].join(' · ') || '—')}</p>
+              ${usage(w)}
             </div>
           </header>
           <div class="wcard-body">
